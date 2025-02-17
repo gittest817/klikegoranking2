@@ -2,5 +2,4 @@ streamlit
 pandas
 requests
 beautifulsoup4
-baseathle
-recup_klikego
+
