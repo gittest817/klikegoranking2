@@ -55,6 +55,11 @@ def main():
         min_age = st.number_input("Âge minimum pour le classement :", min_value=0, value=18)
         max_age = st.number_input("Âge maximum pour le classement :", min_value=0, value=100)
         sex_filter = st.selectbox("Filtrer par sexe :", ["Les deux", "Masculin", "Féminin"])
+        # Bouton "Boosting" expérimental pour augmenter le nombre de workers
+        boosting = st.checkbox(
+            "Activer le Boosting (Phase expérimentale : augmente le nombre de workers à 100, peut causer un crash)",
+            value=False
+        )
 
         if st.button("Appliquer les filtres"):
             st.session_state['min_age'] = min_age
@@ -65,6 +70,8 @@ def main():
                 st.session_state['sex_filter'] = 'f'
             else:
                 st.session_state['sex_filter'] = ''
+            # Stocker le paramètre de boosting dans le session_state
+            st.session_state['boosting'] = boosting
             st.success("Filtres appliqués")
 
     if 'sex_filter' in st.session_state:
@@ -77,6 +84,7 @@ def main():
         max_age = st.session_state['max_age']
         sex_filter = st.session_state['sex_filter']
         link = st.session_state['link']
+        boosting = st.session_state.get('boosting', False)
 
         # Extraction des coureurs
         page_number = 0
@@ -115,7 +123,10 @@ def main():
         min_distance_km = 5
         speed_threshold = 25
 
-        # Récupération des performances en parallèle avec 15 workers
+        # Déterminer le nombre de workers en fonction du boosting
+        max_workers = 100 if boosting else 15
+
+        # Récupération des performances en parallèle avec le nombre de workers défini
         with st.spinner("Récupération des performances des athlètes..."):
             total_athletes = len(athletes)
             performances = []
@@ -123,8 +134,7 @@ def main():
             time_info = st.empty()
             start_time = time.time()
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-                # Soumettre toutes les tâches pour chaque athlète
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_athlete = {
                     executor.submit(fetch_athlete_performance, athlete, min_distance_km, sex_filter): athlete
                     for athlete in athletes
@@ -137,7 +147,6 @@ def main():
                     completed += 1
                     progress_bar.progress(completed / total_athletes)
                     
-                    # Mise à jour du temps estimé
                     elapsed = time.time() - start_time
                     avg_time = elapsed / completed
                     remaining = total_athletes - completed
