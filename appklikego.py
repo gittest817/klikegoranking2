@@ -1,9 +1,15 @@
 import time
 import streamlit as st
+import concurrent.futures
+import requests
+import pandas as pd
+
 from baseathle import get_athletes_performances, calculate_best_performance, filter_performances_by_age
 from recup_klikego import parse_link, fetch_course_options, fetch_data, extract_runners
-import pandas as pd
-import requests
+
+def fetch_athlete_performance(athlete, min_distance_km, sex_filter):
+    """Récupère les performances pour un athlète donné."""
+    return get_athletes_performances([athlete], min_distance_km, sex_filter)
 
 def main():
     st.title("Classement des Coureurs")
@@ -22,10 +28,8 @@ def main():
                 try:
                     reference_id = parse_link(link)
                     st.success("Lien valide !")
-                    # Utilisation d'une session pour récupérer la liste d'épreuves
                     with requests.Session() as session:
                         course_options = fetch_course_options(session, reference_id)
-                    # On stocke les données dans le session_state
                     st.session_state['filtered_options'] = course_options
                     st.session_state['reference_id'] = reference_id
                     st.session_state['link'] = link
@@ -55,7 +59,6 @@ def main():
         if st.button("Appliquer les filtres"):
             st.session_state['min_age'] = min_age
             st.session_state['max_age'] = max_age
-            # Convertir le filtre de sexe en 'm' ou 'f' si nécessaire
             if sex_filter.lower() == "masculin":
                 st.session_state['sex_filter'] = 'm'
             elif sex_filter.lower() == "féminin":
@@ -108,52 +111,58 @@ def main():
         st.write("Liste des athlètes récupérés :")
         st.write(athletes)
 
-        # Paramètres
+        # Paramètres pour les performances
         min_distance_km = 5
         speed_threshold = 25
 
-        # Récupération des performances avec barre de progression
+        # Récupération des performances en parallèle avec 15 workers
         with st.spinner("Récupération des performances des athlètes..."):
+            total_athletes = len(athletes)
+            performances = []
             progress_bar = st.progress(0)
             time_info = st.empty()
             start_time = time.time()
-            total_athletes = len(athletes)
-            performances = []
-            
-            for i, athlete in enumerate(athletes):
-                # Récupération des performances d'un athlète
-                athlete_perf = get_athletes_performances([athlete], min_distance_km, sex_filter)
-                if athlete_perf:
-                    performances.extend(athlete_perf)
-                
-                progress = (i + 1) / total_athletes
-                progress_bar.progress(progress)
 
-                elapsed = time.time() - start_time
-                avg_time_per_athlete = elapsed / (i + 1)
-                remaining = total_athletes - (i + 1)
-                est_time_left = avg_time_per_athlete * remaining
+            with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+                # Soumettre toutes les tâches pour chaque athlète
+                future_to_athlete = {
+                    executor.submit(fetch_athlete_performance, athlete, min_distance_km, sex_filter): athlete
+                    for athlete in athletes
+                }
+                completed = 0
+                for future in concurrent.futures.as_completed(future_to_athlete):
+                    result = future.result()
+                    if result:
+                        performances.extend(result)
+                    completed += 1
+                    progress_bar.progress(completed / total_athletes)
+                    
+                    # Mise à jour du temps estimé
+                    elapsed = time.time() - start_time
+                    avg_time = elapsed / completed
+                    remaining = total_athletes - completed
+                    est_time_left = avg_time * remaining
 
-                def format_seconds(sec):
-                    h = int(sec // 3600)
-                    m = int((sec % 3600) // 60)
-                    s = int(sec % 60)
-                    if h > 0:
-                        return f"{h}h {m}min {s}s"
-                    elif m > 0:
-                        return f"{m}min {s}s"
-                    else:
-                        return f"{s}s"
+                    def format_seconds(sec):
+                        h = int(sec // 3600)
+                        m = int((sec % 3600) // 60)
+                        s = int(sec % 60)
+                        if h > 0:
+                            return f"{h}h {m}min {s}s"
+                        elif m > 0:
+                            return f"{m}min {s}s"
+                        else:
+                            return f"{s}s"
 
-                elapsed_str = format_seconds(elapsed)
-                est_str = format_seconds(est_time_left)
-                time_info.markdown(f"**Temps écoulé :** {elapsed_str} | **Temps restant estimé :** {est_str}")
-        
+                    elapsed_str = format_seconds(elapsed)
+                    est_str = format_seconds(est_time_left)
+                    time_info.markdown(f"**Temps écoulé :** {elapsed_str} | **Temps restant estimé :** {est_str}")
+
         if not performances:
             st.warning("Aucune performance trouvée pour les athlètes.")
             return
 
-        # Filtrer par tranche d'âge
+        # Filtrage par tranche d'âge
         performances_by_age = filter_performances_by_age(performances, min_age, max_age)
         if not performances_by_age:
             st.warning("Aucune performance trouvée dans la tranche d'âge spécifiée.")
@@ -194,7 +203,6 @@ def main():
         st.subheader("Meilleures performances (triées par vitesse) :")
         st.dataframe(df_best_performances_sorted)
 
-        # Bouton pour télécharger les résultats au format CSV
         csv = df_best_performances_sorted.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="Télécharger les résultats en CSV",
